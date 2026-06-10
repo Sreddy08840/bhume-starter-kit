@@ -38,8 +38,12 @@ def _utm_crs_for(lon: float, lat: float) -> str:
         return f"EPSG:{32700 + zone}"
 
 
-def _reproject_geometry(geom: BaseGeometry, src_crs: str, dst_crs: str) -> BaseGeometry:
-    transformer = Transformer.from_crs(src_crs, dst_crs, always_xy=True)
+def _reproject_geometry(geom: BaseGeometry, src_crs, dst_crs) -> BaseGeometry:
+    # Convert CRS objects to proper format for pyproj
+    from pyproj.crs import CRS
+    src_crs_obj = CRS.from_user_input(src_crs)
+    dst_crs_obj = CRS.from_user_input(dst_crs)
+    transformer = Transformer.from_crs(src_crs_obj, dst_crs_obj, always_xy=True)
     return shp_transform(lambda x, y, z=None: transformer.transform(x, y), geom)
 
 
@@ -262,7 +266,7 @@ def extract_patch(
 ) -> Patch:
     with rasterio.open(imagery_path) as src:
         imagery_crs = str(src.crs)
-        geom_imagery = _reproject_geometry(plot_geom, plot_crs, imagery_crs)
+        geom_imagery = _reproject_geometry(plot_geom, plot_crs, src.crs)
         minx, miny, maxx, maxy = geom_imagery.bounds
         left = minx - buffer_meters
         bottom = miny - buffer_meters
@@ -477,21 +481,45 @@ def _compute_alignment_score(
         polygon_patch = _reproject_geometry(polygon_utm, utm_crs, patch_crs)
         h, w = boundary_mask.shape
         polygon_mask = np.zeros((h, w), dtype=np.uint8)
-        coords = np.array(polygon_patch.boundary.coords)
+        
+        # Handle MultiPolygon/MultiLineString: iterate through all sub-components
+        def collect_rings(geom):
+            rings = []
+            if geom.geom_type == 'Polygon':
+                rings.append(geom.exterior)
+                for interior in geom.interiors:
+                    rings.append(interior)
+            elif geom.geom_type == 'MultiPolygon':
+                for poly in geom.geoms:
+                    rings.append(poly.exterior)
+                    for interior in poly.interiors:
+                        rings.append(interior)
+            elif geom.geom_type in ('LineString', 'LinearRing'):
+                rings.append(geom)
+            elif geom.geom_type == 'MultiLineString':
+                for line in geom.geoms:
+                    rings.append(line)
+            return rings
+        
+        boundary = polygon_patch.boundary
+        rings = collect_rings(boundary)
         inv_transform = ~patch_transform
-        pixel_coords = []
-        for x, y in coords:
-            col, row = inv_transform * (x, y)
-            pixel_coords.append((int(round(col)), int(round(row))))
-        if len(pixel_coords) < 2:
-            return 0.0
-        cv2.polylines(
-            polygon_mask,
-            [np.array(pixel_coords, dtype=np.int32)],
-            isClosed=True,
-            color=1,
-            thickness=2,
-        )
+        
+        for ring in rings:
+            coords = np.array(ring.coords)
+            pixel_coords = []
+            for x, y in coords:
+                col, row = inv_transform * (x, y)
+                pixel_coords.append((int(round(col)), int(round(row))))
+            if len(pixel_coords) >= 2:
+                cv2.polylines(
+                    polygon_mask,
+                    [np.array(pixel_coords, dtype=np.int32)],
+                    isClosed=True,
+                    color=1,
+                    thickness=2,
+                )
+        
         overlap = np.sum((polygon_mask > 0) & (boundary_mask > 0))
         total_boundary = np.sum(polygon_mask > 0)
         if total_boundary == 0:
@@ -789,21 +817,21 @@ def main():
     village_dir = Path(sys.argv[1])
     output_path = sys.argv[2] if len(sys.argv) > 2 else village_dir / "predictions.geojson"
 
-    print("=" * 80)
-    print("Starting Upgraded Cadastral Boundary Correction Pipeline (Gold/Platinum Level)")
-    print("=" * 80)
+    print("=" * 80, flush=True)
+    print("Starting Upgraded Cadastral Boundary Correction Pipeline (Gold/Platinum Level)", flush=True)
+    print("=" * 80, flush=True)
 
     # Step 1: Load village
-    print("\n[1/11] Loading village data...")
+    print("\n[1/11] Loading village data...", flush=True)
     village_data = load_village(village_dir)
-    print(f"   Loaded {len(village_data.plots)} plots")
+    print(f"   Loaded {len(village_data.plots)} plots", flush=True)
     if village_data.example_truths is not None:
-        print(f"   Found {len(village_data.example_truths)} example truths for calibration")
+        print(f"   Found {len(village_data.example_truths)} example truths for calibration", flush=True)
 
     # Step 2: Compute global alignment
-    print("\n[2/11] Computing global alignment...")
+    print("\n[2/11] Computing global alignment...", flush=True)
     global_alignment = compute_global_alignment(village_data)
-    print(f"   Global shift: dx={global_alignment.dx:.2f}m, dy={global_alignment.dy:.2f}m (method: {global_alignment.method})")
+    print(f"   Global shift: dx={global_alignment.dx:.2f}m, dy={global_alignment.dy:.2f}m (method: {global_alignment.method})", flush=True)
 
     # Initialize storage
     plot_shifts: Dict[str, PlotShift] = {}
@@ -815,10 +843,10 @@ def main():
     confidence_inputs_dict: Dict[str, ConfidenceInputs] = {}
 
     # Step 3-7: Iterate plots, extract patches, detect boundaries, align, compute area/edge scores
-    print("\n[3-7/11] Processing plots (extracting patches, detecting boundaries, aligning)...")
+    print("\n[3-7/11] Processing plots (extracting patches, detecting boundaries, aligning)...", flush=True)
     for i, plot_num in enumerate(village_data.plots.index):
         if i % 10 == 0:
-            print(f"   Processed {i}/{len(village_data.plots)} plots...")
+            print(f"   Processed {i}/{len(village_data.plots)} plots...", flush=True)
 
         plot_geom = village_data.get_plot(plot_num)
         original_geometries[plot_num] = plot_geom
@@ -868,7 +896,7 @@ def main():
                 neighbor_score=0.5,
             )
         except Exception as e:
-            print(f"   Warning: Failed to process plot {plot_num}: {e}")
+            print(f"   Warning: Failed to process plot {plot_num}: {e}", flush=True)
             corrected_geometries[plot_num] = plot_geom
             plot_shifts[plot_num] = PlotShift(plot_number=plot_num, dx=global_alignment.dx, dy=global_alignment.dy)
             area_scores[plot_num] = 0.0
@@ -881,10 +909,10 @@ def main():
                 neighbor_score=0.5,
             )
 
-    print(f"   Processed {len(village_data.plots)}/{len(village_data.plots)} plots.")
+    print(f"   Processed {len(village_data.plots)}/{len(village_data.plots)} plots.", flush=True)
 
     # Step 8: Calibrate confidence using example truths if available
-    print("\n[8/11] Calibrating confidence...")
+    print("\n[8/11] Calibrating confidence...", flush=True)
     calibrator = CalibratedConfidence()
     if village_data.example_truths is not None:
         truths = village_data.example_truths
@@ -911,10 +939,10 @@ def main():
                 ious.append(float(iou))
                 inputs_list.append(confidence_inputs_dict[p])
             calibrator.fit(inputs_list, ious)
-            print(f"   Calibrated confidence using {len(common_plots)} example truths")
+            print(f"   Calibrated confidence using {len(common_plots)} example truths", flush=True)
 
     # Step 9-10: Compute neighbor score, confidence, correct or flag
-    print("\n[9-10/11] Computing neighbor scores, confidence, and generating predictions...")
+    print("\n[9-10/11] Computing neighbor scores, confidence, and generating predictions...", flush=True)
     plot_predictions: List[PlotPrediction] = []
 
     for plot_num in village_data.plots.index:
@@ -941,35 +969,35 @@ def main():
             corrected_geometry=corrected_geometries[plot_num],
             original_geometry=plot_geom,
             method_note=f"dx={plot_shift.dx:.2f}m, dy={plot_shift.dy:.2f}m, rot={0:.2f}deg, global={global_alignment.method}",
-            corrected_threshold=0.7,
+            corrected_threshold=0.5,
         )
         plot_predictions.append(prediction)
 
     # Step 11: Write predictions.geojson
-    print("\n[11/11] Generating predictions GeoDataFrame and saving...")
+    print("\n[11/11] Generating predictions GeoDataFrame and saving...", flush=True)
     predictions_gdf = generate_predictions_gdf(plot_predictions)
     write_predictions(output_path, predictions_gdf)
 
     # Print summary
-    print("\n" + "=" * 80)
-    print("Upgraded Pipeline Complete! Summary:")
-    print("=" * 80)
-    print(f"   Total plots: {len(predictions_gdf)}")
+    print("\n" + "=" * 80, flush=True)
+    print("Upgraded Pipeline Complete! Summary:", flush=True)
+    print("=" * 80, flush=True)
+    print(f"   Total plots: {len(predictions_gdf)}", flush=True)
     corrected_count = len(predictions_gdf[predictions_gdf["status"] == "corrected"])
     flagged_count = len(predictions_gdf[predictions_gdf["status"] == "flagged"])
-    print(f"   Corrected: {corrected_count}")
-    print(f"   Flagged: {flagged_count}")
-    print(f"\n   Predictions saved to: {output_path}")
+    print(f"   Corrected: {corrected_count}", flush=True)
+    print(f"   Flagged: {flagged_count}", flush=True)
+    print(f"\n   Predictions saved to: {output_path}", flush=True)
 
     # Try to score against example truths
     try:
         bhume_village = load(village_dir)
         if bhume_village.example_truths is not None:
-            print("\nScoring predictions against example truths...")
+            print("\nScoring predictions against example truths...", flush=True)
             score_result = score(predictions_gdf, bhume_village)
-            print("\n" + str(score_result))
+            print("\n" + str(score_result), flush=True)
     except Exception as e:
-        print(f"\nNote: Could not score predictions: {e}")
+        print(f"\nNote: Could not score predictions: {e}", flush=True)
 
 
 if __name__ == "__main__":

@@ -186,28 +186,44 @@ class PlotAligner:
             h, w = boundary_mask.shape
             polygon_mask = np.zeros((h, w), dtype=np.uint8)
 
-            # Get polygon boundary coordinates in pixel space
-            coords = np.array(polygon_patch.boundary.coords)
+            # Handle MultiPolygon/MultiLineString: iterate through all sub-components
+            def collect_rings(geom):
+                rings = []
+                if geom.geom_type == 'Polygon':
+                    rings.append(geom.exterior)
+                    for interior in geom.interiors:
+                        rings.append(interior)
+                elif geom.geom_type == 'MultiPolygon':
+                    for poly in geom.geoms:
+                        rings.append(poly.exterior)
+                        for interior in poly.interiors:
+                            rings.append(interior)
+                elif geom.geom_type in ('LineString', 'LinearRing'):
+                    rings.append(geom)
+                elif geom.geom_type == 'MultiLineString':
+                    for line in geom.geoms:
+                        rings.append(line)
+                return rings
 
-            # Convert coordinates to pixels
+            boundary = polygon_patch.boundary
+            rings = collect_rings(boundary)
             inv_transform = ~patch_transform
-            pixel_coords = []
-            for x, y in coords:
-                col, row = inv_transform * (x, y)
-                pixel_coords.append((int(round(col)), int(round(row))))
-
-            if len(pixel_coords) < 2:
-                return 0.0
-
-            # Draw polygon boundary on mask
             import cv2
-            cv2.polylines(
-                polygon_mask,
-                [np.array(pixel_coords, dtype=np.int32)],
-                isClosed=True,
-                color=1,
-                thickness=2,
-            )
+
+            for ring in rings:
+                coords = np.array(ring.coords)
+                pixel_coords = []
+                for x, y in coords:
+                    col, row = inv_transform * (x, y)
+                    pixel_coords.append((int(round(col)), int(round(row))))
+                if len(pixel_coords) >= 2:
+                    cv2.polylines(
+                        polygon_mask,
+                        [np.array(pixel_coords, dtype=np.int32)],
+                        isClosed=True,
+                        color=1,
+                        thickness=2,
+                    )
 
             # Calculate overlap
             overlap = np.sum((polygon_mask > 0) & (boundary_mask > 0))

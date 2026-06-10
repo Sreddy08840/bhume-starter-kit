@@ -52,7 +52,7 @@ def main():
     assert 0 <= predictions_gdf.loc["plot_001", "confidence"] <= 1
     assert 0 <= predictions_gdf.loc["plot_002", "confidence"] <= 1
 
-    print("\n✅ All tests passed!")
+    print("\nAll tests passed!")
 
 
 if __name__ == "__main__":

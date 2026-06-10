@@ -86,6 +86,10 @@ class FieldBoundaryDetector:
             hint_normalized = cv2.normalize(
                 boundary_hint, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U
             )
+            # Resize hint to match edges size
+            target_size = (edges.shape[1], edges.shape[0])  # (width, height) for cv2.resize
+            if hint_normalized.shape != edges.shape:
+                hint_normalized = cv2.resize(hint_normalized, target_size, interpolation=cv2.INTER_LINEAR)
             # Weighted fusion of edges and hint
             edges = cv2.addWeighted(edges, 0.7, hint_normalized, 0.3, 0)
 

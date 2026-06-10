@@ -72,13 +72,37 @@ def main():
         # Reproject to patch CRS
         from solution.alignment import _reproject_geometry
         poly_patch = _reproject_geometry(polygon, "EPSG:4326", patch.crs)
-        coords = list(poly_patch.boundary.coords)
+        
+        # Handle MultiPolygon/MultiLineString: iterate through all sub-components
+        def collect_rings(geom):
+            rings = []
+            if geom.geom_type == 'Polygon':
+                rings.append(geom.exterior)
+                for interior in geom.interiors:
+                    rings.append(interior)
+            elif geom.geom_type == 'MultiPolygon':
+                for poly in geom.geoms:
+                    rings.append(poly.exterior)
+                    for interior in poly.interiors:
+                        rings.append(interior)
+            elif geom.geom_type in ('LineString', 'LinearRing'):
+                rings.append(geom)
+            elif geom.geom_type == 'MultiLineString':
+                for line in geom.geoms:
+                    rings.append(line)
+            return rings
+
+        boundary = poly_patch.boundary
+        rings = collect_rings(boundary)
         inv_transform = ~patch.transform
-        pixel_coords = []
-        for x, y in coords:
-            col, row = inv_transform * (x, y)
-            pixel_coords.append((col, row))
-        draw.line(pixel_coords, fill=color, width=width)
+
+        for ring in rings:
+            coords = list(ring.coords)
+            pixel_coords = []
+            for x, y in coords:
+                col, row = inv_transform * (x, y)
+                pixel_coords.append((col, row))
+            draw.line(pixel_coords, fill=color, width=width)
 
     draw_polygon(plot_geom, color=(0, 255, 0), width=3)  # Green - original
     draw_polygon(alignment_result.best_polygon, color=(255, 0, 0), width=3)  # Red - aligned
