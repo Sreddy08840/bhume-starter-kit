@@ -1,0 +1,23 @@
+
+BhuMe Cadastral Boundary Correction - Video Commands
+==============================================
+
+1. Navigate to project directory:
+   cd "C:\Users\sredd\Downloads\bhume-starter-kit\bhume-starter-kit
+
+2. Check truth files (optional, to verify the data):
+   uv run check_truths.py
+
+3. Run full demo (generates predictions for both villages):
+   uv run python run_full_demo.py
+
+4. (Optional) Run our improved pipeline (uses solution components)
+   # If you want to run the upgraded pipeline (our more advanced solution:
+   # uv run upgraded_pipeline.py data/34855_vadnerbhairav_chandavad_nashik
+   # uv run upgraded_pipeline.py data/Malatavari
+
+Notes:
+- If virtualenv is broken (package not found):
+  - Close all terminals that might be holding the .venv,
+  - Delete the .venv folder,
+  - Then run: uv sync
